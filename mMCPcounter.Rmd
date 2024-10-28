@@ -1,0 +1,836 @@
+---
+title: "MCP + clustering"
+output: html_document
+date: '2022-12-14'
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r , echo=FALSE, message=FALSE, warning=FALSE, fig.height=5, fig.width=5}
+## ==================================================
+#### Chargement des packages requis pour l'analyse
+```
+
+```{r , echo=FALSE, message=FALSE, warning=FALSE, fig.height=5, fig.width=5}
+## ==================================================
+library(MCPcounter)
+library(mMCPcounter)
+library(dendextend)
+library(matrixStats)
+library(rvg)
+library(ComplexHeatmap)
+library(circlize)
+```
+
+```{r , echo=FALSE, message=FALSE, warning=FALSE, fig.height=5, fig.width=5}
+### ========================================================================================================= ###
+### ========================================================================================================= ###
+#####                                      Récupération des données                                         #####
+### ========================================================================================================= ###
+### ========================================================================================================= ###
+```
+
+```{r}
+#Importation de la matrice d'expression 
+dag<-read.csv("GSE1897final.csv", sep="\t")
+rownames(dag) <- dag[,1]
+head(dag)
+dag<-dag[,-1]
+head(dag)
+
+dag1<-dag[,!names(dag)=="GSM33729"]
+
+dim(dag)
+dim(dag1)
+```
+
+On constate que les différents modèles ne sont pas regroupés ensemble. Cela est due au fait qu'il fallait faire la moyenne des différentes valeurs de Cy3 et Cy5 pour chaque échantillon. On aura ainsi au total 63 ou 64 échantillons correspondant au 7 modèles 
+```{r}
+df=dag1
+newF<-function(x) {    #On crée la fonction newF
+  i=seq(from=1, to=132-1, by=2)
+  return((x[i]+x[i+1])/2)
+  
+}
+df2 <- as.data.frame(t(apply(X=df,     #On applique la fonction newF au tableau df=adg qui contient les genes en fonction des différents échantillons  
+             FUN=newF,
+             MARGIN = 1)))
+dim(df2)
+dim(df)
+head(df2)
+```
+
+
+```{r}
+#Ajout du GSM GSM33729 qui a été supprimé lors de l'application de la fonction newF car on avait qu'une seule valeur 
+# Ajouter une colonne vide nommée "GSM33729" à df2
+df2$GSM33729 <- NA
+
+# Fusionner les valeurs de la colonne "GSM33729" de "dag" dans df2
+df2$GSM33729 <- dag$GSM33729
+head(df2)
+# Ou bien, utilisez la fonction merge si vous préférez :
+# df2 <- merge(df2, dag[, c("GSM33729")], by = "row.names", all.x = TRUE)
+
+```
+
+
+```{r}
+df2<-df2[-1,]
+head(df2)
+write.table(df2,"AnnotationGSE1897mean.txt", quote=F, sep="\t")
+```
+
+
+```{r , echo=FALSE, message=FALSE, warning=FALSE, fig.height=5, fig.width=5}
+## ======================
+### MCP-counter souris
+## ======================
+
+mcp<-mMCPcounter.estimate(df2) #Enlever la ligne supplémentaire des macrophages
+mcp<-mcp[-5,]
+mcp
+#mcp <- MCPcounter.estimate(dag, featuresType = "HUGO_symbols")
+```
+
+
+```{r , echo=FALSE, message=FALSE, warning=FALSE, fig.height=5, fig.width=5}
+### ========================================================================================================= ###
+### ========================================================================================================= ###
+##### Clustering hierarchique sur la matrice mcp                          #####
+### ========================================================================================================= ###
+### ========================================================================================================= ###
+```
+
+```{r , echo=FALSE, message=FALSE, warning=FALSE, fig.height=6, fig.width=10}
+K <- 3
+# nombre de clusters (à faire varier)
+dat.norm <- mcp - rowMeans(mcp, na.rm=T) # centrage des données
+dend <- hclust(dist(t(dat.norm), method = "euclidean"), method = "ward.D2") # construction du dendrogram
+ctr <- cutree(dend, k=K)  # récupération de la partition
+dend <- color_branches(dend, k = K) # coloration du dendrogram
+cl <- paste("ST.ns.", ctr, sep=""); names(cl) <- names(ctr)
+
+#! AJouter les annotations d'intéret du dataset
+# ---------------------------------------------
+status <-read.csv("20240422_statusfinal.csv") # Importer le tableau d'annotation des gènes
+#20240422_statusfinal.csv conteint l'annotation des echantillons après moyenne 
+hap <- HeatmapAnnotation(ST.NS=cl[colnames(dat.norm)],GENOTYPE=status$Modeles,
+                         col=list(ST.NS=c("ST.ns.1"="orange", "ST.ns.2"="red", "ST.ns.3"="blue", "ST.ns.4"="green", 
+                                          "ST.ns.5"="purple","ST.ns.6"="black"), GENOTYPE=c("Acox1"="blue", "CIP"="pink", 
+                                          "DEN"="red", "E2f1"="green", "Myc"="yellow", "Myc/E2f1"="black", "Myc/Tgfa"="grey"))
+                                  )
+
+ht1 <- Heatmap(dat.norm, 
+               col = colorRamp2(c(-1, 0, 1),c("blue", "white", "red")), cluster_rows = T, cluster_columns = dend,
+               show_row_names = T,  show_column_names = T,name="ht1",  column_title = "MCP GSE1897",   
+               column_title_gp = gpar(fontsize = 8),
+               column_names_gp = gpar(fontsize = 8), # taille du nom des échantillons
+               row_names_gp = gpar(fontsize = 12), top_annotation = hap,
+               row_title_rot = 0, gap = unit(3, "mm"),  row_title_gp = gpar(fontsize = 9),
+               heatmap_legend_param = list( color_bar = "discrete",title_gp = gpar(fontsize = 6), labels_gp = gpar(fontsize = 6))
+)
+ComplexHeatmap:::draw(ht1)
+```
+J'ai ça comme heatmap après calcul des valeurs en utilisant la fonction newF. Je constate qu'il n'y a pas de regroupement en fonction du modèle. 
+
+Je refais le clustering en calculant la moyenne et le centroide d'expression par modèle. ce qui reviendra à le faire pour 7 échantillons. 
+
+Heatmap en fonction de la moyenne d'expression:
+```{r}
+#Pour ce faire, je fusionne le tableau df2 et status qui contient l'annotation des échantillons
+
+mcp_t<-as.data.frame(t(mcp))
+df3<-cbind(status, mcp_t)
+row.names(df3) <- NULL
+df3<-df3[ ,-1]
+head(df3)
+
+#Calcul de la moyenne par modèle 
+library(plyr)
+df3_mean <- ddply(df3,.(Modeles),numcolwise(mean)) 
+mcp_mean<-as.data.frame(t(df3_mean)); colnames(mcp_mean) <- mcp_mean[1,] ;mcp_mean <- mcp_mean[-1,]; mcp_mean<-sapply(mcp_mean, function(x)as.numeric(as.character(x)))
+mcp_mean
+# Assigner les rownames de mcp_mean_t à mcp_mean
+rownames(mcp_mean) <- rownames(mcp)
+rownames(mcp_mean)
+mcp_mean
+mcp_mean<-as.data.frame(mcp_mean)
+```
+
+
+```{r , echo=FALSE, message=FALSE, warning=FALSE, fig.height=5, fig.width=5}
+### ========================================================================================================= ###
+### ========================================================================================================= ###
+##### Clustering hierarchique sur la matrice mcp_mean                      #####
+### ========================================================================================================= ###
+### ========================================================================================================= ###
+```
+
+```{r , echo=FALSE, message=FALSE, warning=FALSE, fig.height=6, fig.width=10}
+###
+#mcp_mean<-as.numeric(mcp_mean) #Erreur : l'objet 'list' ne peut être converti automatiquement en un type 'double'
+#mcp_meann<-sapply(mcp_mean, function(x)as.numeric(as.character(x)))
+library(ComplexHeatmap)
+
+# Créer un objet Heatmap
+ht <- Heatmap(mcp_mean, 
+              col = colorRamp2(c(-1, 0, 1), c("blue", "white", "red")),  # Schéma de couleurs
+              cluster_rows = FALSE, cluster_columns = TRUE,  # Ne pas regrouper les lignes, regrouper les colonnes
+              show_row_names = TRUE, show_column_names = TRUE,  # Afficher les noms de lignes et de colonnes
+              name = "ht1", column_title = "GSE 1897_mean                                  ", row_title = "Populations cellulaires",  # Titres
+              heatmap_legend_param = list(color_bar = "continuous", title_gp = gpar(fontsize = 12))  # Paramètres de la légende
+)
+
+# Afficher le heatmap
+draw(ht)
+
+```
+
+
+2ème méthode: Calcul des centroides par la méthode des k-means
+```{r}
+# Sélection des colonnes numériques
+df3_numeric <- df3[, sapply(df3, is.numeric)]
+
+# K-means clustering
+set.seed(123)  # Pour la reproductibilité
+num_clusters <- 7  # Nombre de clusters, à ajuster selon vos besoins
+kmeans_result <- kmeans(df3_numeric, centers = num_clusters)
+
+# Centroides par modèle
+centroides <- kmeans_result$centers
+
+# Ajout des noms de modèle comme colonnes
+centroides_df <- as.data.frame(centroides)
+centroides_df$Modeles <- rownames(centroides_df)
+
+# Affichage des centroides par modèle
+print(centroides_df)
+centroides_df1<-as.data.frame(t(centroides_df)); 
+centroides_df1<-sapply(centroides_df1, function(x)as.numeric(as.character(x))) #Transformation des variables en numériques sinon ca ne marche pas pour faire le heatmap
+
+
+colnames(centroides_df1)<-colnames(mcp_mean)
+centroides_df1<-centroides_df1[-9,]
+rownames(centroides_df1)<-rownames(mcp_mean)
+
+mcp_centroides <-centroides_df1
+#mcp_centroides<-centroides_df1; mcp_centroides<-sapply(mcp_centroides, function(x)as.numeric(as.character(x)))
+mcp_centroides
+```
+
+```{r}
+###
+#mcp_mean<-as.numeric(mcp_mean) #Erreur : l'objet 'list' ne peut être converti automatiquement en un type 'double'
+#mcp_meann<-sapply(mcp_mean, function(x)as.numeric(as.character(x)))
+library(ComplexHeatmap)
+mcp_centroides<-as.data.frame(mcp_centroides)
+rownames(mcp_centroides)<-rownames(mcp)
+
+# Créer un objet Heatmap
+ht <- Heatmap(mcp_centroides, 
+              col = colorRamp2(c(-1, 0, 1), c("blue", "white", "red")),  # Schéma de couleurs
+              cluster_rows = FALSE, cluster_columns = TRUE,  # Ne pas regrouper les lignes, regrouper les colonnes
+              show_row_names = TRUE, show_column_names = TRUE,  # Afficher les noms de lignes et de colonnes
+              name = "ht1", column_title = "GSE 1897_centroids", row_title = "Populations cellulaires",  # Titres
+              heatmap_legend_param = list(color_bar = "continuous", title_gp = gpar(fontsize = 12))  # Paramètres de la légende
+)
+
+# Afficher le heatmap
+draw(ht)
+
+```
+
+
+Important: Maintenant, je veux indiquer la présence de cellules cytotoxiques, et myeloid et des signatures fonctionnelles. Donc je dois modifier la fonction mMCPcounter.estimate en ajoutant dans la signature mMCPcounter_signatures_GCRm38 ou 39, les gènes marqueurs de ces populations cellulaires. Je peux créer une nouvelle f°
+
+Import des signatures fonctionnelles extraites des travaux de Job et al.
+```{r}
+Signatures_homme<-read.csv("Job Sylvie.csv", sep="\t")
+```
+
+Conversion en gènes murins  
+```{r}
+library(dplyr)
+mouse_human_genes = read.csv("http://www.informatics.jax.org/downloads/reports/HOM_MouseHumanSequence.rpt",sep="\t")
+# Définition de la fonction pour convertir les gènes humains en gènes de souris
+convert_human_to_mouse <- function(gene_list){
+  output <- c()  # Initialisation du vecteur de sortie
+  
+  # Boucle à travers l'index de la liste des gènes humains
+  for(i in seq_along(gene_list)){
+    gene <- gene_list[i]  # Récupérer le gène humain à l'index actuel
+    
+    # Trouver la clé de classe pour le gène humain actuel
+    class_key <- mouse_human_genes$DB.Class.Key[mouse_human_genes$Symbol == gene & mouse_human_genes$Common.Organism.Name == "human"]
+    
+    # Vérifier si la clé de classe a été trouvée
+    if(length(class_key) > 0){
+      # Sélectionner les gènes de souris correspondants à la clé de classe
+      mouse_genes <- mouse_human_genes$Symbol[mouse_human_genes$DB.Class.Key == class_key & mouse_human_genes$Common.Organism.Name == "mouse, laboratory"]
+      
+      # Ajouter le premier gène de souris à la sortie, s'il existe, sinon ajouter NA
+      if(length(mouse_genes) > 0){
+        output <- c(output, mouse_genes[1])
+      } else {
+        output <- c(output, NA)
+      }
+    } else {
+      # Ajouter NA si la conversion n'a pas pu être effectuée
+      output <- c(output, NA)
+    }
+  }
+  
+  return(output)  # Retourner les gènes convertis
+}
+
+# Appliquer la fonction de conversion des gènes à notre jeu de données
+gene_list <- Signatures_homme[,3]  # Sélectionner la colonne contenant les symboles des gènes
+genes_converted <- convert_human_to_mouse(gene_list)
+
+# Créer un data frame avec les gènes convertis
+genes_converted <- as.data.frame(genes_converted)
+
+```
+
+
+```{r}
+# Calculer le nombre total de gènes
+total_genes <- length(gene_list)
+
+# Compter le nombre de gènes convertis
+converted_count <- sum(!is.na(genes_converted))
+
+# Compter le nombre de NA
+na_count <- sum(is.na(genes_converted))
+
+# Calculer le pourcentage de gènes convertis
+percentage_converted <- (converted_count / total_genes) * 100
+
+# Calculer le pourcentage de NA
+percentage_na <- (na_count / total_genes) * 100
+
+# Afficher les pourcentages
+print(paste("Pourcentage de gènes convertis:", round(percentage_converted, 2), "%"))
+print(paste("Pourcentage de NA:", round(percentage_na, 2), "%"))
+
+```
+
+```{r}
+signatures_souriss<-cbind(Signatures_homme, genes_converted)
+
+signatures_souris<-signatures_souriss[,-c(1,3)]
+head(signatures_souris)
+# Supprimer les lignes contenant des valeurs NA
+signatures_souris <- na.omit(signatures_souris)
+
+```
+
+```{r}
+data("mMCPcounter_signatures_GCRm38")
+
+New_mMCPcounter_signatures_GCRm38<-mMCPcounter_signatures_GCRm38[,c(2:3)]
+# Renommer les colonnes du DataFrame
+colnames(signatures_souris) <- c("Denomination", "Gene.Symbol")
+
+Nouvelle_signature<-rbind(New_mMCPcounter_signatures_GCRm38, signatures_souris)
+
+#Choisir les populations cellulaires suivantes 
+# Liste des termes à conserver dans la colonne "Denomination"
+Pop_to_take <- c("T cells", "NK cells", "B derived", "Monocytes / macrophages", 
+                      "Vessels", "Endothelial cells", "Fibroblasts", "Myeloid", 
+                     "proinflammation", "checkpoint", "Complement", "Cytotoxic")
+
+# Filtrer le tableau Nouvelle_signature pour ne garder que les lignes avec les termes spécifiés dans "Denomination"
+Nouvelle_signature_filtre <- subset(Nouvelle_signature, Denomination %in% Pop_to_take)
+Nouvelle_signature<-Nouvelle_signature_filtre
+```
+
+```{r}
+#Ajout de la signature CAF à Nouvelle_signature
+#Noms des genes correspondant à la signature CAF: Adam33, Cldn11, Col1a1, Col3a1, Crispld2, Cxcl14, Dpt, F3, Fnln1, lslr, Lum, Meg3, Mfap5, Prelp, Ptgis, Sfrp2, Sfrp4, Sympo2, Tmem119
+# Liste des gènes à ajouter
+Genes_CAF <- c("Adam33", "Cldn11", "Col1a1", "Col3a1", "Crispld2", "Cxcl14", "Dpt", "F3", "Fnln1", "Islr", "Lum", "Meg3", "Mfap5", "Prelp", "Ptgis", "Sfrp2", "Sfrp4", "Sympo2", "Tmem119")
+
+# Création d'un nouveau dataframe pour les nouveaux gènes
+nouvelles_lignes <- data.frame(Denomination = "CAF", Gene.Symbol = Genes_CAF)
+
+# Ajout des nouvelles lignes au tableau Nouvelle_signature
+Nouvelle_signature1 <- rbind(Nouvelle_signature, nouvelles_lignes)
+
+
+#Ajout des autres gènes manquants dans ma Nouvelle_signature
+#NK cells 
+Genes_1 <- c("Klra7", "Klra11-ps")
+# Création d'un nouveau dataframe pour les nouveaux gènes
+nouvelles_lignes1 <- data.frame(Denomination = "NK cells", Gene.Symbol = Genes_1)
+# Ajout des nouvelles lignes au tableau Nouvelle_signature
+Nouvelle_signature2 <- rbind(Nouvelle_signature1, nouvelles_lignes1)
+
+# Monocytes/Macrophages  
+Genes_2 <- c("Arhgef37")
+# Création d'un nouveau dataframe pour les nouveaux gènes
+nouvelles_lignes2 <- data.frame(Denomination = "Monocytes/Macrophages", Gene.Symbol = Genes_2)
+# Ajout des nouvelles lignes au tableau Nouvelle_signature
+Nouvelle_signature3 <- rbind(Nouvelle_signature2, nouvelles_lignes2)
+
+# Complement   
+Genes_3 <- c("C1rb", "C1rl", "C1s1", "Cfh")
+# Création d'un nouveau dataframe pour les nouveaux gènes
+nouvelles_lignes3 <- data.frame(Denomination = "Complement", Gene.Symbol = Genes_3)
+# Ajout des nouvelles lignes au tableau Nouvelle_signature
+Nouvelle_signature4 <- rbind(Nouvelle_signature3, nouvelles_lignes3)
+
+# Cytotoxic   
+Genes_4 <- c("Klrc4", "Fgfbp2", "Gnly")
+# Création d'un nouveau dataframe pour les nouveaux gènes
+nouvelles_lignes4 <- data.frame(Denomination = "Cytotoxic", Gene.Symbol = Genes_4)
+# Ajout des nouvelles lignes au tableau Nouvelle_signature
+Nouvelle_signature5 <- rbind(Nouvelle_signature4, nouvelles_lignes4)
+Nouvelle_signature<-Nouvelle_signature5
+```
+
+Je crée une nouvelle fonction Fadoum_mMCP_counter qui me permet de déterminer le TME des différents modèles de souris HCC. 
+```{r}
+#Pour que la fonction puisse marcher, il faut que je charge obligatoirement les fonctions dans ce github: https://github.com/cit-bioinfo/mMCP-counter/blob/master/R/mMCP-counter.R
+Fadoum_mMCP_counter <- function(exp, features = c("Gene.Symbol", "ENSEMBL.ID", "Probes")[1], Fadoum_signature) {
+  foundGenes <- intersect(Fadoum_signature[, features], rownames(exp))
+  
+  if (length(foundGenes) == 0) {
+    stop("No signature found in input row names. Please ensure the features and Fadoum_signature arguments are accurately set.")
+  }
+  
+  absentSignatures <- setdiff(unique(Fadoum_signature$Denomination), unique(Fadoum_signature[Fadoum_signature[, features] %in% rownames(exp), "Denomination"]))
+  
+  if (length(absentSignatures) > 0) {
+    warning(paste("No genes were found for population(s): ", paste(absentSignatures, collapse = ", "), ". Please ensure the signature is correctly specified.", sep = ""))
+  }
+  
+  localSig <- Fadoum_signature[Fadoum_signature[, features] %in% foundGenes, ]
+  expAg <- exp[localSig[, features], ]
+  expAg <- cit.dfAggregate(expAg, localSig$Denomination, fAggreg = median.na)
+  expAg <- expAg[c("T cells", "NK cells", "B derived", "Monocytes / macrophages", 
+                     "Vessels", "Endothelial cells", "Fibroblasts", "Myeloid", 
+                     "proinflammation", "checkpoint", "Complement", "Cytotoxic", "CAF"), ]
+  expAg <- expAg[apply(expAg, 1, function(x) {
+    sum(is.na(x))
+  }) < ncol(expAg), ]
+  
+  return(expAg)
+}
+
+```
+
+```{r}
+#Application de la fonction à notre jeu de données df2
+mcp_all<-Fadoum_mMCP_counter(df2,Fadoum_signature = Nouvelle_signature)
+mcp_all
+```
+
+
+```{r , echo=FALSE, message=FALSE, warning=FALSE, fig.height=5, fig.width=5}
+### ========================================================================================================= ###
+### ========================================================================================================= ###
+##### Clustering hierarchique sur la matrice mcp_all                      #####
+### ========================================================================================================= ###
+### ========================================================================================================= ###
+```
+
+```{r , echo=FALSE, message=FALSE, warning=FALSE, fig.height=6, fig.width=10}
+K <- 4
+set.seed(210798) #Pour avoir le meme heatmap a chaque fois que je vais le refaire
+# nombre de clusters (à faire varier)
+dat.norm <- mcp_all - rowMeans(mcp_all, na.rm=T) # centrage des données
+dend <- hclust(dist(t(dat.norm), method = "euclidean"), method = "ward.D2") # construction du dendrogram
+ctr <- cutree(dend, k=K)  # récupération de la partition
+dend <- color_branches(dend, k = K) # coloration du dendrogram
+cl <- paste("ST.ns.", ctr, sep=""); names(cl) <- names(ctr)
+
+
+
+#! AJouter les annotations d'intéret du dataset
+# ---------------------------------------------
+status <-read.csv("20240422_statusfinal.csv") # Importer le tableau d'annotation des gènes
+#20240422_statusfinal.csv conteint l'annotation des echantillons après moyenne 
+
+hap <- HeatmapAnnotation(ST.NS=cl[colnames(dat.norm)],GENOTYPE=status$Modeles,
+                         col=list(ST.NS=c("ST.ns.1"="orange", "ST.ns.2"="red", "ST.ns.3"="blue", "ST.ns.4"="green", 
+                                          "ST.ns.5"="purple","ST.ns.6"="black"), 
+                                  GENOTYPE=c("Acox1"="blue", "CIP"="pink", 
+                                          "DEN"="red", "E2f1"="green", "Myc"="yellow", "Myc/E2f1"="black", "Myc/Tgfa"="grey")
+
+))
+
+ht1 <- Heatmap(dat.norm, 
+               col = colorRamp2(c(-1, 0, 1),c("blue", "white", "red")), cluster_rows = T, cluster_columns = dend,
+               show_row_names = T,  show_column_names = T,name="ht1",  column_title = "MCP GSE1897",   
+               column_title_gp = gpar(fontsize = 8),
+               column_names_gp = gpar(fontsize = 8), # taille du nom des échantillons
+               row_names_gp = gpar(fontsize = 12), top_annotation = hap,
+               row_title_rot = 0, gap = unit(3, "mm"),  row_title_gp = gpar(fontsize = 9),
+               heatmap_legend_param = list( color_bar = "discrete",title_gp = gpar(fontsize = 6), labels_gp = gpar(fontsize = 6))
+)
+ComplexHeatmap:::draw(ht1)
+
+```
+
+
+```{r}
+# Compter le nombre de chaque modèle de souris dans les clusters
+cluster_counts <- xtabs(~ status$Modeles + cl)
+print(cluster_counts)
+```
+Analyse et interprétation de la composition des clusters selon les modèles: 
+Cluster1: Ce cluster regroupe des modèles de souris Acox1, CIP, DEN et E2f1. Les DEN se trouvent exclusivement dans le cluster 1. Les CIP également sont quasiment totalement  dans le cluster 1. De plus, aucun Myc(homo ou hetero ne se trouvent dans le cluster 1). 
+Cluster 2: Il regroupe tous les modèles sauf les DEN. 
+Cluster 3: Il regroupe tous les modèles sauf les DEN, CIP et Myc/Tgfa. 
+Cluster 4: Ce cluster regroupe exclusivement des modèles de souris Myc(Myc, Myc/Tgfa et Myc/E2f1)
+
+
+```{r}
+library(ggplot2)
+
+# Compter le nombre de chaque modèle de souris dans les clusters
+cluster_counts <- xtabs(~ status$Modeles + cl)
+
+# Renommer les colonnes et les lignes
+colnames(cluster_counts) <- paste("Cluster", 1:K, sep = "")
+#rownames(cluster_counts) <- rownames(status)
+
+
+# Convertir le tableau de comptage en un format adapté pour ggplot2
+cluster_counts_df <- as.data.frame.matrix(cluster_counts)
+cluster_counts_df<-cluster_counts_df[,-5]
+cluster_counts_df$Modeles <- rownames(cluster_counts_df)
+cluster_counts_df_long <- reshape2::melt(cluster_counts_df, id.vars = "Modeles")
+
+# Créer un camembert pour chaque cluster
+plots <- lapply(1:K, function(i) {
+  cluster_data <- subset(cluster_counts_df_long, variable == paste("Cluster", i, sep = ""))
+  pie_chart <- ggplot(cluster_data, aes(x = "", y = value, fill = Modeles)) +
+    geom_bar(stat = "identity", width = 1) +
+    coord_polar("y", start = 0) +
+    labs(title = paste("Cluster", i)) +
+    theme_void()
+})
+
+# Afficher les camemberts
+print(plots)
+
+```
+
+
+On souhaite savoir si les nombres des modèles diffèrent significativement selon les clusters: test de chi2
+Test d'indépendance du chi2: Le test d’indépendance du chi-carré est utilisé pour analyser la table de fréquence (c.-à-d. la table de contengence) formée par deux variables catégoriques. Le test du chi-carré évalue s’il existe une association significative entre les catégories des deux variables. Le test de Chi-carré examine si les lignes et les colonnes d’un tableau de contingence sont statistiquement significativement associées.
+
+Hypothèse nulle (H0): la ligne et les variables de colonne de la table de contingence sont indépendantes.
+Hypothèse alternative (H1): les variables de ligne et de colonne sont dépendantes
+
+Pour chaque cellule du tableau, nous devons calculer la valeur attendue sous hypothèse nulle.
+
+```{r}
+#Le test d’indépendance du chi-carré est utilisé pour analyser la table de fréquence (c.-à-d. la table de contengence) formée par deux variables catégoriques. Le test du chi-carré évalue s’il existe une association significative entre les catégories des deux variables. 
+chisq<-chisq.test(cluster_counts)
+chisq
+#Les modèles sont significativement différents selon les clusters (p-value < 0,05). On rejette H0.
+```
+
+
+Pour voir ou se situe la différence, je fais: script MCA cours Data mining
+## de MCA à CA
+
+j'effectue un test d'indépendance de Khi-deux
+```{r}
+res.test <- chisq.test(cluster_counts)
+res.test
+```
+
+et je vois que l'on peut rejeter l'hypothèse d'indépendance. La répartition des modèles est dépendante du type de cluster. 
+
+En effet, voici les valeurs attendus si les deux variables étaient indépendantes:
+
+```{r}
+round(res.test$expected, 1)
+```
+
+Quelles sont les combinaisons qui contribuent le plus aux écarts à l'indépendance ?
+```{r}
+round(100*res.test$residuals^2 / res.test$statistic,1)
+```
+
+Le fait d'avoir d'etre un modèle DEN, Acox1 et Myc/Tgfa contribue aux écarts à l'indépendance ?
+```{r}
+library(corrplot)
+corrplot(chisq$residuals, is.cor = FALSE)
+```
+
+
+
+Je refais le clustering en calculant la moyenne et le centroide d'expression par modèle; ce qui reviendra à le faire pour 7 échantillons. 
+Heatmap en fonction de la moyenne d'expression:
+```{r}
+#Pour ce faire, je fusionne le tableau df2 et status qui contient l'annotation des échantillons
+mcp_t<-as.data.frame(t(mcp_all))
+df3<-cbind(status, mcp_t)
+row.names(df3) <- NULL
+df3<-df3[ ,-1]
+head(df3)
+
+#Calcul de la moyenne par modèle 
+library(plyr)
+df3_mean <- ddply(df3,.(Modeles),numcolwise(mean)) #Script de Sylvie 
+mcp_mean<-as.data.frame(t(df3_mean)); colnames(mcp_mean) <- mcp_mean[1,] ;mcp_mean <- mcp_mean[-1,]; mcp_mean<-sapply(mcp_mean, function(x)as.numeric(as.character(x)))
+mcp_mean
+# Assigner les rownames de mcp_mean_t à mcp_mean
+rownames(mcp_mean) <- rownames(mcp_all)
+rownames(mcp_mean)
+mcp_mean
+mcp_mean<-as.data.frame(mcp_mean)
+```
+
+
+
+```{r , echo=FALSE, message=FALSE, warning=FALSE, fig.height=5, fig.width=5}
+### ========================================================================================================= ###
+### ========================================================================================================= ###
+##### Clustering hierarchique sur la matrice mcp_mean                      #####
+### ========================================================================================================= ###
+### ========================================================================================================= ###
+```
+
+```{r , echo=FALSE, message=FALSE, warning=FALSE, fig.height=6, fig.width=10}
+###
+#mcp_mean<-as.numeric(mcp_mean) #Erreur : l'objet 'list' ne peut être converti automatiquement en un type 'double'
+#mcp_meann<-sapply(mcp_mean, function(x)as.numeric(as.character(x)))
+library(ComplexHeatmap)
+
+# Créer un objet Heatmap
+ht <- Heatmap(mcp_mean, 
+              col = colorRamp2(c(-1, 0, 1), c("blue", "white", "red")),  # Schéma de couleurs
+              cluster_rows = FALSE, cluster_columns = TRUE,  # Ne pas regrouper les lignes, regrouper les colonnes
+              show_row_names = TRUE, show_column_names = TRUE,  # Afficher les noms de lignes et de colonnes
+              name = "ht1", column_title = "GSE 1897_mean                                  ", row_title = "Populations cellulaires",  # Titres
+              heatmap_legend_param = list(color_bar = "continuous", title_gp = gpar(fontsize = 12))  # Paramètres de la légende
+)
+
+# Afficher le heatmap
+draw(ht)
+```
+
+
+Calcul des centroides: Méthodes des k-means
+```{r}
+# Sélection des colonnes numériques
+df3_numeric <- df3[, sapply(df3, is.numeric)]
+
+# K-means clustering
+set.seed(123)  # Pour la reproductibilité
+num_clusters <- 7  # Nombre de clusters, à ajuster selon vos besoins
+kmeans_result <- kmeans(df3_numeric, centers = num_clusters)
+
+# Centroides par modèle
+centroides <- kmeans_result$centers
+
+# Ajout des noms de modèle comme colonnes
+centroides_df <- as.data.frame(centroides)
+centroides_df$Modeles <- rownames(centroides_df)
+
+# Affichage des centroides par modèle
+print(centroides_df)
+centroides_df1<-as.data.frame(t(centroides_df)); 
+centroides_df1<-sapply(centroides_df1, function(x)as.numeric(as.character(x))) #Transformation des variables en numériques sinon ca ne marche pas pour faire le heatmap
+
+
+colnames(centroides_df1)<-colnames(mcp_mean)
+centroides_df1<-centroides_df1[-9,]
+rownames(centroides_df1)<-rownames(mcp_mean)
+
+mcp_centroides <-centroides_df1
+#mcp_centroides<-centroides_df1; mcp_centroides<-sapply(mcp_centroides, function(x)as.numeric(as.character(x)))
+mcp_centroides
+```
+
+
+```{r}
+###
+#mcp_mean<-as.numeric(mcp_mean) #Erreur : l'objet 'list' ne peut être converti automatiquement en un type 'double'
+#mcp_meann<-sapply(mcp_mean, function(x)as.numeric(as.character(x)))
+library(ComplexHeatmap)
+mcp_centroides<-as.data.frame(mcp_centroides)
+rownames(mcp_centroides)<-rownames(mcp_all)
+
+# Créer un objet Heatmap
+ht <- Heatmap(mcp_centroides, 
+              col = colorRamp2(c(-1, 0, 1), c("blue", "white", "red")),  # Schéma de couleurs
+              cluster_rows = FALSE, cluster_columns = TRUE,  # Ne pas regrouper les lignes, regrouper les colonnes
+              show_row_names = TRUE, show_column_names = TRUE,  # Afficher les noms de lignes et de colonnes
+              name = "ht1", column_title = "GSE 1897_centroids", row_title = "Populations cellulaires",  # Titres
+              heatmap_legend_param = list(color_bar = "continuous", title_gp = gpar(fontsize = 12))  # Paramètres de la légende
+)
+
+# Afficher le heatmap
+draw(ht)
+```
+
+
+Je refais les heatmaps des moyennes et des centroides en faisant un scale des valeurs des populations cellulaires. En effet, on souhaite voir l'abondance des populations en fonction des modèles. Cependant, si on ne centre pas et réduit, si une population est plus abondante qu'une autre, elle aura tendance à écraser les autres. De ce fait, on les mets au meme niveau pour que cela soit comparable. 
+```{r}
+#Scale df3 colonnes 3:15
+df3_scaled<-scale(df3[,(3:15)])
+#Vérification du centrage et réduction 
+colMeans(df3_scaled)
+plotDensities(df3_scaled)
+#Les données sont pas normalisées 
+df3_scaledd<-cbind(df3[,1:2], df3_scaled)
+df4<-df3_scaledd
+plotDensities(df4[,3:15])
+```
+
+Heatmap en fonction de la moyenne d'expression:
+```{r}
+#Calcul de la moyenne par modèle 
+library(plyr)
+df4_mean <- ddply(df4,.(Modeles),numcolwise(mean)) #Script de Sylvie 
+mcp_mean<-as.data.frame(t(df4_mean)); colnames(mcp_mean) <- mcp_mean[1,] ;mcp_mean <- mcp_mean[-1,]; mcp_mean<-sapply(mcp_mean, function(x)as.numeric(as.character(x)))
+mcp_mean
+# Assigner les rownames de mcp_mean_t à mcp_mean
+rownames(mcp_mean) <- rownames(mcp_all)
+rownames(mcp_mean)
+mcp_mean
+mcp_mean<-as.data.frame(mcp_mean)
+```
+
+
+
+
+```{r , echo=FALSE, message=FALSE, warning=FALSE, fig.height=5, fig.width=5}
+### ========================================================================================================= ###
+### ========================================================================================================= ###
+##### Clustering hierarchique sur la matrice mcp_mean                      #####
+### ========================================================================================================= ###
+### ========================================================================================================= ###
+```
+
+```{r , echo=FALSE, message=FALSE, warning=FALSE, fig.height=6, fig.width=10}
+###
+#mcp_mean<-as.numeric(mcp_mean) #Erreur : l'objet 'list' ne peut être converti automatiquement en un type 'double'
+#mcp_meann<-sapply(mcp_mean, function(x)as.numeric(as.character(x)))
+library(ComplexHeatmap)
+
+# Créer un objet Heatmap
+ht <- Heatmap(mcp_mean, 
+              col = colorRamp2(c(-1, 0, 1), c("blue", "white", "red")),  # Schéma de couleurs
+              cluster_rows = FALSE, cluster_columns = TRUE,  # Ne pas regrouper les lignes, regrouper les colonnes
+              show_row_names = TRUE, show_column_names = TRUE,  # Afficher les noms de lignes et de colonnes
+              name = "ht1", column_title = "GSE 1897_mean                                  ", row_title = "Populations cellulaires",  # Titres
+              heatmap_legend_param = list(color_bar = "continuous", title_gp = gpar(fontsize = 12))  # Paramètres de la légende
+)
+
+# Afficher le heatmap
+draw(ht)
+```
+
+
+
+Calcul des centroides: Méthodes des k-means
+```{r}
+
+# Sélection des colonnes numériques
+df4_numeric <- df4[, sapply(df4, is.numeric)]
+
+# K-means clustering
+set.seed(123)  # Pour la reproductibilité
+num_clusters <- 7  # Nombre de clusters, à ajuster selon vos besoins
+kmeans_result <- kmeans(df4_numeric, centers = num_clusters)
+
+# Centroides par modèle
+centroides <- kmeans_result$centers
+
+# Ajout des noms de modèle comme colonnes
+centroides_df <- as.data.frame(centroides)
+centroides_df$Modeles <- rownames(centroides_df)
+
+# Affichage des centroides par modèle
+print(centroides_df)
+centroides_df1<-as.data.frame(t(centroides_df)); 
+centroides_df1<-sapply(centroides_df1, function(x)as.numeric(as.character(x))) #Transformation des variables en numériques sinon ca ne marche pas pour faire le heatmap
+
+
+colnames(centroides_df1)<-colnames(mcp_mean)
+centroides_df1<-centroides_df1[-9,]
+rownames(centroides_df1)<-rownames(mcp_mean)
+
+mcp_centroides <-centroides_df1
+#mcp_centroides<-centroides_df1; mcp_centroides<-sapply(mcp_centroides, function(x)as.numeric(as.character(x)))
+mcp_centroides
+```
+
+
+```{r}
+###
+#mcp_mean<-as.numeric(mcp_mean) #Erreur : l'objet 'list' ne peut être converti automatiquement en un type 'double'
+#mcp_meann<-sapply(mcp_mean, function(x)as.numeric(as.character(x)))
+library(ComplexHeatmap)
+mcp_centroides<-as.data.frame(mcp_centroides)
+rownames(mcp_centroides)<-rownames(mcp_all)
+
+# Créer un objet Heatmap
+ht <- Heatmap(mcp_centroides, 
+              col = colorRamp2(c(-1, 0, 1), c("blue", "white", "red")),  # Schéma de couleurs
+              cluster_rows = FALSE, cluster_columns = TRUE,  # Ne pas regrouper les lignes, regrouper les colonnes
+              show_row_names = TRUE, show_column_names = TRUE,  # Afficher les noms de lignes et de colonnes
+              name = "ht1", column_title = "GSE 1897_centroids", row_title = "Populations cellulaires",  # Titres
+              heatmap_legend_param = list(color_bar = "continuous", title_gp = gpar(fontsize = 12))  # Paramètres de la légende
+)
+
+# Afficher le heatmap
+draw(ht)
+```
+
+
+
+Je refais le calcul des centroides et le heatmap comme Sylvie 
+```{r}
+df4<-df4[,-1]
+centroides <- aggregate(. ~ Modeles, data = df4, FUN = mean)
+```
+
+```{r}
+centroides_df1<-as.data.frame(t(centroides)); colnames(centroides_df1) <- centroides_df1[1,];centroides_df1 <- centroides_df1[-1,]
+centroides_df1<-sapply(centroides_df1, function(x)as.numeric(as.character(x))) #Transformation des variables en numériques sinon ca ne marche pas pour faire le heatmap
+
+centroides<-centroides[,-1]
+
+rownames(centroides_df1)<-colnames(centroides)
+#centroides_df1<-centroides_df1[-9,]
+
+mcp_centroides <-centroides_df1
+#mcp_centroides<-centroides_df1; mcp_centroides<-sapply(mcp_centroides, function(x)as.numeric(as.character(x)))
+mcp_centroides
+```
+
+
+```{r}
+###
+#mcp_mean<-as.numeric(mcp_mean) #Erreur : l'objet 'list' ne peut être converti automatiquement en un type 'double'
+#mcp_meann<-sapply(mcp_mean, function(x)as.numeric(as.character(x)))
+library(ComplexHeatmap)
+#mcp_centroides<-as.data.frame(mcp_centroides)
+#rownames(mcp_centroides)<-rownames(mcp_all)
+
+# Créer un objet Heatmap
+ht <- Heatmap(mcp_centroides, 
+              col = colorRamp2(c(-1, 0, 1), c("blue", "white", "red")),  # Schéma de couleurs
+              cluster_rows = FALSE, cluster_columns = TRUE,  # Ne pas regrouper les lignes, regrouper les colonnes
+              show_row_names = TRUE, show_column_names = TRUE,  # Afficher les noms de lignes et de colonnes
+              name = "ht1", column_title = "GSE 1897_centroids", row_title = "Populations cellulaires",  # Titres
+              heatmap_legend_param = list(color_bar = "continuous", title_gp = gpar(fontsize = 12))  # Paramètres de la légende
+)
+
+# Afficher le heatmap
+draw(ht)
+```
